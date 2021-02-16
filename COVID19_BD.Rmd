@@ -1,0 +1,286 @@
+---
+title: "COVID-19 Bangladesh EDA and Daily Cases Prediction"
+output: github_document
+always_allow_html: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(htmltab)
+library(tidyverse)
+library(ggplot2)
+library(plotly)
+library(prophet)
+library(lubridate)
+library(XML)
+library(httr)
+library(tidyquant)
+
+url<- 'https://en.wikipedia.org/wiki/COVID-19_pandemic_in_Bangladesh'
+r<- GET(url)
+doc<- readHTMLTable(doc = content(r, "text"))
+names(doc)
+
+df<- htmltab("https://en.wikipedia.org/wiki/COVID-19_pandemic_in_Bangladesh",10)
+df
+dim(df)
+```
+
+```{r}
+df<- df %>% 
+        janitor::clean_names()
+names(df)
+```
+
+```{r}
+df$date<- ymd(df$date)
+df[12,2]<- 433
+df[12,6]<- 36
+
+df<- df %>% 
+  mutate(in_the_last_24_hours_newly_tested= if_else(is.na(in_the_last_24_hours_newly_tested),"0", in_the_last_24_hours_newly_tested),
+         in_the_last_24_hours_new_cases= if_else(is.na(in_the_last_24_hours_new_cases),"0",in_the_last_24_hours_new_cases),
+         in_the_last_24_hours_new_deaths=if_else(is.na(in_the_last_24_hours_new_deaths),"0",in_the_last_24_hours_new_deaths),
+         in_the_last_24_hours_newly_recovered=if_else(is.na(in_the_last_24_hours_newly_recovered),"0",in_the_last_24_hours_newly_recovered))%>%
+  separate(day_of_pandemic_outbreak, into= c("day_of_pandemic","day_of_outbreak"), sep = "/")
+
+ df[1,10]<- 0
+ df[1:3,11]<- 0 
+```
+
+```{r}
+
+
+df[,-c(1)]<- sapply(df[,-c(1)], function(x) as.numeric(gsub(",","",x))) 
+df<- na.omit(df)
+dim(df)
+
+
+df<- df %>% 
+  mutate( in_the_last_24_hours_newly_tested = total_tested - lag(total_tested),
+          in_the_last_24_hours_new_cases = total_cases - lag(total_cases),
+          in_the_last_24_hours_new_deaths = total_deaths - lag(total_deaths),
+          in_the_last_24_hours_newly_recovered = total_recovered - lag(total_recovered))
+
+
+df[1,6:9] <- df[1,2:5]
+str(df)
+df
+
+
+```
+
+```{r}
+
+  df %>%
+  ggplot(aes(date, in_the_last_24_hours_new_cases)) +
+    # Train Region
+    annotate("text", x = ymd("2020-03-20"), y = 3500,
+             color = palette_light()[[1]], label = "Train Region") +
+    # Validation Region
+    geom_rect(xmin = as.numeric(ymd("2020-11-01")), 
+              xmax = as.numeric(ymd("2020-12-31")),
+              ymin = 0, ymax = Inf, alpha = 0.02,
+              fill = palette_light()[[3]]) +
+    annotate("text", x = ymd("2020-11-29"), y = 3500,
+             color = palette_light()[[1]], label = "Validation\nRegion") +
+    # Test Region
+    geom_rect(xmin = as.numeric(ymd("2021-01-01")), 
+              xmax = as.numeric(ymd("2021-02-12")),
+              ymin = 0, ymax = Inf, alpha = 0.02,
+              fill = palette_light()[[4]]) +
+    annotate("text", x = ymd("2021-01-19"), y = 3500,
+             color = palette_light()[[1]], label = "Test\nRegion") +
+    # Data
+    geom_line(col = palette_light()[1]) +
+    geom_point(col = palette_light()[1]) +
+    geom_ma(ma_fun = SMA, n = 12, size = 1) +
+    # Aesthetics
+    theme_tq() +
+    scale_x_date(date_breaks = waiver(), date_labels = waiver()) +
+    labs(title = "COVID-19: March 2020 To February 2021",
+         subtitle = "Train, Validation, and Test Sets Shown",
+         x = "",
+         y = "Daily new cases")
+
+```
+
+```{r,fig.height=20,fig.width=20}
+ggplotly(ggplot(df)+
+  geom_line(aes(date,in_the_last_24_hours_new_cases))+
+  scale_x_date(breaks =  waiver(), labels = waiver())+
+  labs(title =  "Daily cases of COVID-19 Patient", subtitle = "From March to middle of August", y = "daily cases"))
+```
+
+```{r}
+ggplotly(ggplot(df)+
+  geom_line(aes(day_of_pandemic,in_the_last_24_hours_new_deaths)))
+
+```
+
+```{r}
+ds<- df$date
+y<- df$total_cases
+dts<- data.frame(ds,y)
+mts<- prophet(dts)
+future_ts<- make_future_dataframe(mts, periods = 30)
+forcast_ts<- predict(mts, future_ts)
+dyplot.prophet(mts,forcast_ts)
+prophet_plot_components(mts,forcast_ts)
+pre_ts<- forcast_ts$yhat[1:340]
+actual_ts<- mts$history$y
+plot(pre_ts, actual_ts)
+abline(lm(pre_ts~actual_ts), col="blue")
+
+```
+
+```{r}
+ds<- df$date
+y<- df$total_deaths
+dtd<- data.frame(ds,y)
+mtd<- prophet(dtd)
+future_td<- make_future_dataframe(mtd, periods = 30)
+forcast_td<- predict(mtd, future_td)
+dyplot.prophet(mtd,forcast_td)
+prophet_plot_components(mtd,forcast_td)
+pre_td<- forcast_td$yhat[1:340]
+actual_td<- mtd$history$y
+plot(pre_td, actual_td)
+abline(lm(pre_td~actual_td), col="blue")
+
+```
+
+```{r}
+ds<- df$date
+y<- df$in_the_last_24_hours_new_cases
+dtns<- data.frame(ds,y)
+mtns<- prophet(dtns)
+future_tns<- make_future_dataframe(mtns, periods = 180)
+forcast_tns<- predict(mtns, future_tns)
+dyplot.prophet(mtns,forcast_tns)
+prophet_plot_components(mtns,forcast_tns)
+pre_tns<- forcast_tns$yhat[1:340]
+actual_tns<- mtns$history$y
+plot(pre_tns, actual_tns)
+abline(lm(pre_tns~actual_tns), col="blue")
+
+```
+
+```{r}
+ds<- df$date
+y<- df$in_the_last_24_hours_new_deaths
+dtnd<- data.frame(ds,y)
+mtnd<- prophet(dtnd)
+future_tnd<- make_future_dataframe(mtnd, periods = 30)
+forcast_tnd<- predict(mtnd, future_tnd)
+dyplot.prophet(mtnd,forcast_tnd)
+prophet_plot_components(mtnd,forcast_tnd)
+pre_tnd<- forcast_tnd$yhat[1:340]
+actual_tnd<- mtnd$history$y
+plot(pre_tnd, actual_tnd)
+abline(lm(pre_tnd~actual_tnd), col="blue")
+```
+
+```{r}
+library(h2o)        # Awesome ML Library
+library(timetk)     # Toolkit for working with time series in R
+library(tidyquant) 
+
+
+cdf<- df %>% 
+  select(date, in_the_last_24_hours_new_cases) 
+
+
+ndf<- df %>% 
+  select(date, in_the_last_24_hours_new_cases) %>% 
+  tk_augment_timeseries_signature()
+
+ndf %>% 
+  glimpse()
+
+ndf_clean<- ndf %>% 
+  select_if(~ !is.Date(.)) %>% 
+  select_if(~ !any(is.na(.))) %>% 
+  mutate_if(is.ordered, ~as.character(.) %>% as.factor)
+
+train_tbl<- ndf_clean %>% filter( month <7)
+valid_tbl<- ndf_clean %>% filter( month == 12 | month == 11)
+test_tbl<- ndf_clean %>% filter(month == 01 | month == 02)
+
+h2o.init()
+
+
+
+h2o.no_progress()
+
+#Before running below code, please run library(bit64)
+train_h2o <- as.h2o(train_tbl)
+valid_h2o <- as.h2o(valid_tbl)
+test_h2o  <- as.h2o(test_tbl)
+
+y <- "in_the_last_24_hours_new_cases"
+x <- names(train_h2o) %>% setdiff(y)
+
+automl_models_h2o <- h2o.automl(
+    x = x, 
+    y = y, 
+    training_frame = train_h2o, 
+    validation_frame = valid_h2o, 
+    leaderboard_frame = test_h2o, 
+    max_runtime_secs = 60, 
+    stopping_metric = "deviance")
+
+
+automl_leader <- automl_models_h2o@leader
+
+pred_h2o <- h2o.predict(automl_leader, newdata = test_h2o)
+
+h2o.performance(automl_leader, newdata = test_h2o)
+
+
+```
+
+```{r}
+
+cdf %>% 
+    openair:: selectByDate( start = "2021-01-01", end = "2021-02-12") %>%
+    add_column(pred = pred_h2o %>% as_tibble() %>% pull(predict)) %>%
+    rename(actual = in_the_last_24_hours_new_cases) %>%
+    mutate(
+        error     = actual - pred,
+        error_pct = error / actual
+        ) %>%
+    summarise(
+        ME   = mean(error),
+        RMSE = mean(error^2)^0.5,
+        MAE  = mean(abs(error)),
+        MAPE = mean(abs(error_pct)),
+        MPE  = mean(error_pct)
+    ) %>%
+    glimpse()
+
+
+```
+
+```{r}
+new_d<- data.frame( date = as.Date("2021-02-13") + sort(sample(1:20, 20)))
+
+new_h20<- new_d %>% 
+  tk_augment_timeseries_signature() %>% 
+  select_if(~ !is.Date(.)) %>% 
+  select_if(~ !any(is.na(.))) %>% 
+  mutate_if(is.ordered, ~as.character(.) %>% as.factor) %>% 
+  as.h2o()
+  
+  
+new_d %>% 
+  add_column(Predicted_cases = h2o.predict(automl_leader, newdata = new_h20) %>%   as_tibble() %>% 
+  pull(predict))
+
+
+  
+```
+
