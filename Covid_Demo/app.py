@@ -13,13 +13,11 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── Data (same pipeline as the notebook) ─────────────────────────────────────
+# ── Data ─────────────────────────────────────────────────────────────────────
 
-DATA_URL = (
-    "https://raw.githubusercontent.com/Sahadat97/"
-    "COVID-19-Bangladesh-EDA-and-Daily-Cases-Prediction/main/"
-    "covid19_bangladesh_cleaned.csv"
-)
+_BASE = "https://raw.githubusercontent.com/Sahadat97/COVID-19-Bangladesh-EDA-and-Daily-Cases-Prediction/main/"
+DATA_URL = _BASE + "covid19_bangladesh_cleaned.csv"
+PRED_URL = _BASE + "predictions.csv"
 
 @st.cache_data(show_spinner="Loading data…")
 def load_data():
@@ -29,41 +27,13 @@ def load_data():
     df = df.sort_values("date").reset_index(drop=True)
     return df
 
-
-# ── Models ────────────────────────────────────────────────────────────────────
-
-@st.cache_data(show_spinner="Training ARIMA…")
-def run_arima(values, forecast_days):
-    from statsmodels.tsa.arima.model import ARIMA
-    train = values[:-forecast_days]
-    test  = values[-forecast_days:]
-    model = ARIMA(train, order=(5, 1, 0))
-    fit   = model.fit()
-    preds = np.maximum(fit.forecast(steps=forecast_days), 0)
-    rmse  = float(np.sqrt(np.mean((preds - test) ** 2)))
-    return preds, rmse
+@st.cache_data(show_spinner="Loading predictions…")
+def load_predictions():
+    pred = pd.read_csv(PRED_URL)
+    pred["date"] = pd.to_datetime(pred["date"])
+    return pred
 
 
-@st.cache_data(show_spinner="Training Prophet…")
-def run_prophet(_dates, values, forecast_days):
-    from prophet import Prophet
-    train_df = pd.DataFrame({
-        "ds": _dates[:-forecast_days],
-        "y":  values[:-forecast_days],
-    })
-    m = Prophet(
-        daily_seasonality=False,
-        yearly_seasonality=True,
-        weekly_seasonality=True,
-        changepoint_prior_scale=0.05,
-    )
-    m.fit(train_df)
-    future   = m.make_future_dataframe(periods=forecast_days)
-    forecast = m.predict(future)
-    preds    = np.maximum(forecast["yhat"].values[-forecast_days:], 0)
-    test     = values[-forecast_days:]
-    rmse     = float(np.sqrt(np.mean((preds - test) ** 2)))
-    return preds, rmse
 
 
 # ── Layout ────────────────────────────────────────────────────────────────────
@@ -76,7 +46,8 @@ st.markdown(
     "Data loaded from the cleaned dataset used in the notebook."
 )
 
-df = load_data()
+df   = load_data()
+pred = load_predictions()
 
 tab_eda, tab_forecast, tab_compare = st.tabs(
     ["📊 Exploratory Analysis", "🔮 Forecast", "📈 Model Comparison"]
@@ -149,10 +120,17 @@ with tab_forecast:
     FC_TEST_START = pd.Timestamp("2021-01-01")
     FC_TEST_END   = pd.Timestamp("2021-02-12")
 
-    # Pre-trained model metadata (require GPU — results from notebook)
-    _PRETRAINED = {
-        "LSTM":       {"rmse": 158.00, "mae": 133.59, "color": "#00CC96", "seed": 7},
-        "H2O AutoML": {"rmse": 200.47, "mae": 157.40, "color": "#636EFA", "seed": 13},
+    # Compute RMSE / MAE from the real notebook predictions file
+    def _metrics(col):
+        r = float(np.sqrt(np.mean((pred[col] - pred["actual"]) ** 2)))
+        m = float(np.mean(np.abs(pred[col] - pred["actual"])))
+        return r, m
+
+    _MODEL_META = {
+        "ARIMA":      {"col": "arima_pred",   "color": "#EF553B", "live": False},
+        "H2O AutoML": {"col": "h2o_pred",     "color": "#636EFA", "live": False},
+        "Prophet":    {"col": "prophet_pred",  "color": "#FFA15A", "live": False},
+        "LSTM":       {"col": "lstm_pred",     "color": "#00CC96", "live": False},
     }
 
     c1, c2 = st.columns([1, 3])
@@ -160,120 +138,67 @@ with tab_forecast:
     with c1:
         model_choice = st.selectbox(
             "Model",
-            ["ARIMA (5,1,0)", "H2O AutoML", "Prophet", "LSTM"],
+            ["ARIMA", "H2O AutoML", "Prophet", "LSTM"],
         )
-        is_pretrained = model_choice in _PRETRAINED
+        meta = _MODEL_META[model_choice]
 
-        if is_pretrained:
+        if model_choice in ("LSTM", "H2O AutoML"):
             st.info(
-                f"**{model_choice}** requires GPU training and cannot run live. "
-                "Showing results from the original notebook on the "
-                "Jan 1 – Feb 12, 2021 test window."
+                f"**{model_choice}** requires GPU training. "
+                "Showing notebook results on the Jan 1 – Feb 12, 2021 test window."
             )
-            forecast_days = 43          # notebook test window length
-            target_col    = "new_cases" # what the notebook trained on
         else:
-            forecast_days = st.slider("Forecast window (days)", 7, 60, 20)
-            target_col    = st.selectbox(
-                "Target variable",
-                ["new_cases", "total_cases", "new_deaths", "total_deaths"],
+            st.info(
+                f"Showing **{model_choice}** notebook results on the "
+                "Jan 1 – Feb 12, 2021 test window."
             )
 
         run_btn = st.button("▶ Run Forecast", type="primary", use_container_width=True)
 
     with c2:
         if run_btn:
-            if is_pretrained:
-                mask_test  = (df["date"] >= FC_TEST_START) & (df["date"] <= FC_TEST_END)
-                mask_train = df["date"] < FC_TEST_START
+            mask_train = df["date"] < FC_TEST_START
+            train_vals = df.loc[mask_train, "new_cases"].values.astype(float)
 
-                actual     = df.loc[mask_test,  "new_cases"].values.astype(float)
-                train_vals = df.loc[mask_train, "new_cases"].values.astype(float)
-                test_dates = df.loc[mask_test,  "date"]
+            rmse, mae = _metrics(meta["col"])
 
-                # Reconstruct predictions that reproduce the notebook RMSE
-                nb    = _PRETRAINED[model_choice]
-                rng   = np.random.default_rng(nb["seed"])
-                noise = rng.normal(0, 1, len(actual))
-                noise = noise / np.sqrt(np.mean(noise ** 2)) * nb["rmse"]
-                preds = np.maximum(actual + noise, 0)
-
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=df.loc[mask_train, "date"], y=train_vals,
-                    name="Training data", line=dict(color="#aaa", width=1),
-                ))
-                fig.add_trace(go.Scatter(
-                    x=test_dates, y=actual,
-                    name="Actual (test window)", line=dict(color="#fff", width=2.5),
-                ))
-                fig.add_trace(go.Scatter(
-                    x=test_dates, y=preds,
-                    name=f"{model_choice} (notebook)",
-                    line=dict(color=nb["color"], dash="dash", width=2),
-                ))
-                fig.add_vrect(
-                    x0=FC_TEST_START, x1=FC_TEST_END,
-                    fillcolor="rgba(239,85,59,0.07)", line_width=0,
-                    annotation_text="Notebook test window",
-                    annotation_position="top left",
-                )
-                fig.update_layout(
-                    title=f"{model_choice} — New Cases (notebook test window)",
-                    xaxis_title="Date", yaxis_title="New Cases",
-                    hovermode="x unified",
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                col_r, col_m = st.columns(2)
-                col_r.metric("RMSE (notebook)", f"{nb['rmse']:,.2f}")
-                col_m.metric("MAE  (notebook)", f"{nb['mae']:,.2f}")
-
-            else:
-                series     = df[target_col].values.astype(float)
-                dates      = df["date"]
-                test_dates = dates.iloc[-forecast_days:]
-
-                if model_choice == "ARIMA (5,1,0)":
-                    preds, rmse = run_arima(series, forecast_days)
-                else:  # Prophet
-                    preds, rmse = run_prophet(dates.tolist(), series, forecast_days)
-
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=dates, y=series, name="Actual (all)",
-                    line=dict(color="#aaa", width=1),
-                ))
-                fig.add_trace(go.Scatter(
-                    x=test_dates, y=series[-forecast_days:],
-                    name="Actual (test window)", line=dict(color="#00CC96", width=2),
-                ))
-                fig.add_trace(go.Scatter(
-                    x=test_dates, y=preds,
-                    name=f"{model_choice} Forecast",
-                    line=dict(color="#EF553B", dash="dash", width=2),
-                ))
-                fig.add_vrect(
-                    x0=test_dates.iloc[0], x1=test_dates.iloc[-1],
-                    fillcolor="rgba(239,85,59,0.07)", line_width=0,
-                    annotation_text="Forecast window", annotation_position="top left",
-                )
-                fig.update_layout(
-                    title=f"{model_choice} — {target_col.replace('_', ' ').title()}",
-                    xaxis_title="Date", yaxis_title="Count", hovermode="x unified",
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                st.metric("RMSE", f"{rmse:,.1f}")
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=df.loc[mask_train, "date"], y=train_vals,
+                name="Training data", line=dict(color="#aaa", width=1),
+            ))
+            fig.add_trace(go.Scatter(
+                x=pred["date"], y=pred["actual"],
+                name="Actual (test window)", line=dict(color="#fff", width=2.5),
+            ))
+            fig.add_trace(go.Scatter(
+                x=pred["date"], y=pred[meta["col"]],
+                name=f"{model_choice} (notebook)",
+                line=dict(color=meta["color"], dash="dash", width=2),
+            ))
+            fig.add_vrect(
+                x0=FC_TEST_START, x1=FC_TEST_END,
+                fillcolor="rgba(239,85,59,0.07)", line_width=0,
+                annotation_text="Test window", annotation_position="top left",
+            )
+            fig.update_layout(
+                title=f"{model_choice} — New Cases (Jan 1 – Feb 12, 2021)",
+                xaxis_title="Date", yaxis_title="New Cases",
+                hovermode="x unified",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            col_r, col_m = st.columns(2)
+            col_r.metric("RMSE", f"{rmse:,.2f}")
+            col_m.metric("MAE",  f"{mae:,.2f}")
         else:
-            st.info("Configure the options on the left and click **▶ Run Forecast**.")
+            st.info("Select a model on the left and click **▶ Run Forecast**.")
 
 
 # ── Tab 3 · Model Comparison ──────────────────────────────────────────────────
 with tab_compare:
     st.subheader("Model Comparison — Test Window: Jan 1 – Feb 12, 2021")
     st.markdown(
-        "Exact results from the notebook. ARIMA and Prophet are also run live on the "
-        "same test window so you can see the forecast curves. "
-        "LSTM and H2O AutoML metrics are from the original notebook (require GPU training)."
+        "Exact results from the notebook — all metrics loaded from `predictions.csv`."
     )
 
     # ── Exact notebook results ─────────────────────────────────────────────────
@@ -359,80 +284,74 @@ with tab_compare:
         "**69.2% improvement** over ARIMA baseline (513.63)"
     )
 
-    # ── Live forecast overlay on the exact test window ─────────────────────────
+    # ── All-model forecast overlay on the exact test window ───────────────────
     st.divider()
-    st.markdown("#### Live Forecast on the Same Test Window (Jan 1 – Feb 12, 2021)")
-    st.caption("ARIMA and Prophet run live; LSTM & H2O shown as flat reference lines from notebook RMSE.")
+    st.markdown("#### All Models — Test Window (Jan 1 – Feb 12, 2021)")
+    st.caption(
+        "ARIMA and Prophet trained on data up to Dec 31, 2020. "
+        "LSTM and H2O AutoML predictions are from the original notebook (GPU-trained)."
+    )
 
-    if st.button("▶ Run Live Forecasts", type="primary"):
-        mask_test  = (df["date"] >= TEST_START) & (df["date"] <= TEST_END)
+    if st.button("▶ Show All Forecasts", type="primary"):
         mask_train = df["date"] < TEST_START
+        train_vals = df.loc[mask_train, "new_cases"].values.astype(float)
 
-        if mask_test.sum() == 0:
-            st.warning("Test window not found in the scraped data. Wikipedia may have updated the table structure.")
-        else:
-            train_vals = df.loc[mask_train, "new_cases"].values.astype(float)
-            test_vals  = df.loc[mask_test,  "new_cases"].values.astype(float)
-            test_dates = df.loc[mask_test,  "date"]
-            n_test     = len(test_vals)
+        # Compute live RMSE from predictions file
+        arima_rmse   = float(np.sqrt(np.mean((pred["arima_pred"]   - pred["actual"])**2)))
+        prophet_rmse = float(np.sqrt(np.mean((pred["prophet_pred"] - pred["actual"])**2)))
 
-            train_dates = df.loc[mask_train, "date"]
+        fig_live = go.Figure()
+        fig_live.add_trace(go.Scatter(
+            x=df.loc[mask_train, "date"], y=train_vals,
+            name="Training data", line=dict(color="#aaa", width=1),
+        ))
+        fig_live.add_trace(go.Scatter(
+            x=pred["date"], y=pred["actual"],
+            name="Actual (test)", line=dict(color="#fff", width=2.5),
+        ))
+        fig_live.add_trace(go.Scatter(
+            x=pred["date"], y=pred["arima_pred"],
+            name=f"ARIMA (RMSE {arima_rmse:.0f})",
+            line=dict(color="#EF553B", dash="dash", width=2),
+        ))
+        fig_live.add_trace(go.Scatter(
+            x=pred["date"], y=pred["prophet_pred"],
+            name=f"Prophet (RMSE {prophet_rmse:.0f})",
+            line=dict(color="#FFA15A", dash="dot", width=2),
+        ))
+        fig_live.add_trace(go.Scatter(
+            x=pred["date"], y=pred["lstm_pred"],
+            name="LSTM (RMSE 158, notebook)",
+            line=dict(color="#00CC96", dash="dashdot", width=2),
+        ))
+        fig_live.add_trace(go.Scatter(
+            x=pred["date"], y=pred["h2o_pred"],
+            name="H2O AutoML (RMSE 200, notebook)",
+            line=dict(color="#636EFA", dash="longdash", width=2),
+        ))
+        fig_live.add_vrect(
+            x0=TEST_START, x1=TEST_END,
+            fillcolor="rgba(255,255,255,0.05)", line_width=1,
+            line_color="#555",
+            annotation_text="Test window", annotation_position="top left",
+        )
+        fig_live.update_layout(
+            title="All Models — New Cases Forecast vs Actual",
+            xaxis_title="Date", yaxis_title="New Cases", hovermode="x unified",
+        )
+        st.plotly_chart(fig_live, use_container_width=True)
 
-            with st.spinner("Training ARIMA on data before Jan 1, 2021…"):
-                full_series = df["new_cases"].values.astype(float)
-                arima_preds, arima_live_rmse = run_arima(full_series, n_test)
-
-            with st.spinner("Training Prophet on data before Jan 1, 2021…"):
-                full_dates = df["date"].tolist()
-                prophet_preds, prophet_live_rmse = run_prophet(full_dates, full_series, n_test)
-
-            fig_live = go.Figure()
-            # Training period
-            fig_live.add_trace(go.Scatter(
-                x=df.loc[mask_train, "date"], y=train_vals,
-                name="Training data", line=dict(color="#aaa", width=1),
-            ))
-            # Actual test
-            fig_live.add_trace(go.Scatter(
-                x=test_dates, y=test_vals,
-                name="Actual (test)", line=dict(color="#fff", width=2.5),
-            ))
-            # ARIMA
-            fig_live.add_trace(go.Scatter(
-                x=test_dates, y=arima_preds,
-                name=f"ARIMA live (RMSE {arima_live_rmse:.0f})",
-                line=dict(color="#EF553B", dash="dash", width=2),
-            ))
-            # Prophet
-            fig_live.add_trace(go.Scatter(
-                x=test_dates, y=prophet_preds,
-                name=f"Prophet live (RMSE {prophet_live_rmse:.0f})",
-                line=dict(color="#FFA15A", dash="dot", width=2),
-            ))
-            fig_live.add_vrect(
-                x0=TEST_START, x1=TEST_END,
-                fillcolor="rgba(255,255,255,0.05)", line_width=1,
-                line_color="#555",
-                annotation_text="Test window", annotation_position="top left",
-            )
-            fig_live.update_layout(
-                title="Live Forecast vs Actual — Jan 1 to Feb 12, 2021",
-                xaxis_title="Date", yaxis_title="New Cases", hovermode="x unified",
-            )
-            st.plotly_chart(fig_live, use_container_width=True)
-
-            col1, col2 = st.columns(2)
-            col1.metric("ARIMA live RMSE",   f"{arima_live_rmse:.1f}",
-                        delta=f"notebook: {ARIMA_BASELINE}", delta_color="off")
-            col2.metric("Prophet live RMSE", f"{prophet_live_rmse:.1f}",
-                        delta=f"notebook: 208.90", delta_color="off")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("ARIMA RMSE",   f"{arima_rmse:.1f}")
+        c2.metric("H2O RMSE",     "200.47", help="Notebook value")
+        c3.metric("Prophet RMSE", f"{prophet_rmse:.1f}")
+        c4.metric("LSTM RMSE",    "158.00", help="Notebook value")
     else:
-        st.info("Click **▶ Run Live Forecasts** to see ARIMA and Prophet on the exact test window.")
+        st.info("Click **▶ Show All Forecasts** to overlay all 4 models on the test window.")
 
 
 st.divider()
 st.caption(
-    "Data: covid19_bangladesh_cleaned.csv (GitHub) · "
-    "ARIMA & Prophet computed live · LSTM & H2O AutoML from original notebook · "
-    "Built with Streamlit"
+    "Data: covid19_bangladesh_cleaned.csv · Predictions: predictions.csv · "
+    "LSTM & H2O AutoML from original notebook · Built with Streamlit"
 )
