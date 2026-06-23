@@ -221,9 +221,14 @@ with tab_pipeline:
         st.markdown("**🟢 After — Cleaned dataset**")
         st.caption("Typed columns, parsed dates, nulls filled, footnotes removed")
 
-        clean_preview = df[["date", "new_cases", "total_cases",
-                             "total_deaths", "new_deaths",
-                             "total_recovered"]].head(30).copy()
+        # Same column order as raw Wikipedia table
+        clean_preview = df[[
+            "date", "total_tested", "newly_tested",
+            "total_cases", "new_cases",
+            "total_deaths", "new_deaths",
+            "total_recovered", "newly_recovered",
+            "days_since_first_confirmed_cases",
+        ]].head(30).copy()
         clean_preview["date"] = clean_preview["date"].dt.strftime("%Y-%m-%d")
 
         st.dataframe(clean_preview, use_container_width=True, height=460)
