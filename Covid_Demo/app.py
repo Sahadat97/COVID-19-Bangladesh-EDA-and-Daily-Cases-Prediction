@@ -201,27 +201,40 @@ with tab_compare:
         "Exact results from the notebook — all metrics loaded from `predictions.csv`."
     )
 
-    # ── Exact notebook results ─────────────────────────────────────────────────
-    NOTEBOOK_RESULTS = [
-        {"Rank": 1, "Model": "LSTM",            "RMSE": 158.00, "MAE": 133.59, "RMSE_Improvement_%": 69.2},
-        {"Rank": 2, "Model": "H2O AutoML",       "RMSE": 200.47, "MAE": 157.40, "RMSE_Improvement_%": 61.0},
-        {"Rank": 3, "Model": "Prophet",          "RMSE": 208.90, "MAE": 183.71, "RMSE_Improvement_%": 59.3},
-        {"Rank": 4, "Model": "ARIMA (baseline)", "RMSE": 513.63, "MAE": 465.53, "RMSE_Improvement_%":  0.0},
+    # ── Compute all metrics dynamically from predictions.csv ──────────────────
+    TEST_START = pd.Timestamp("2021-01-01")
+    TEST_END   = pd.Timestamp("2021-02-12")
+
+    _model_cols = [
+        ("LSTM",             "lstm_pred"),
+        ("H2O AutoML",       "h2o_pred"),
+        ("Prophet",          "prophet_pred"),
+        ("ARIMA (baseline)", "arima_pred"),
     ]
-    nb_df = pd.DataFrame(NOTEBOOK_RESULTS).set_index("Rank")
+    _computed = {}
+    for _name, _col in _model_cols:
+        _rmse = float(np.sqrt(np.mean((pred[_col] - pred["actual"]) ** 2)))
+        _mae  = float(np.mean(np.abs(pred[_col] - pred["actual"])))
+        _computed[_name] = {"RMSE": _rmse, "MAE": _mae}
 
-    ARIMA_BASELINE = 513.63
-    TEST_START     = pd.Timestamp("2021-01-01")
-    TEST_END       = pd.Timestamp("2021-02-12")
+    ARIMA_BASELINE = _computed["ARIMA (baseline)"]["RMSE"]
+    for _name in _computed:
+        _imp = (ARIMA_BASELINE - _computed[_name]["RMSE"]) / ARIMA_BASELINE * 100
+        _computed[_name]["RMSE_Improvement_%"] = round(max(_imp, 0.0), 1)
 
-    # ── RMSE bar chart ─────────────────────────────────────────────────────────
+    nb_df = pd.DataFrame([
+        {"Rank": i + 1, "Model": _name, **_vals}
+        for i, (_name, _vals) in enumerate(_computed.items())
+    ]).set_index("Rank")
+
     color_map = {
-        "LSTM":            "#00CC96",
-        "H2O AutoML":      "#636EFA",
-        "Prophet":         "#FFA15A",
-        "ARIMA (baseline)":"#EF553B",
+        "LSTM":             "#00CC96",
+        "H2O AutoML":       "#636EFA",
+        "Prophet":          "#FFA15A",
+        "ARIMA (baseline)": "#EF553B",
     }
 
+    # ── RMSE bar chart ─────────────────────────────────────────────────────────
     fig_bar = go.Figure()
     for _, row in nb_df.iterrows():
         fig_bar.add_trace(go.Bar(
@@ -260,6 +273,7 @@ with tab_compare:
     st.plotly_chart(fig_mae, use_container_width=True)
 
     # ── Improvement chart ──────────────────────────────────────────────────────
+    _imp_max = nb_df["RMSE_Improvement_%"].max()
     fig_imp = go.Figure(go.Bar(
         x=nb_df["Model"],
         y=nb_df["RMSE_Improvement_%"],
@@ -270,7 +284,7 @@ with tab_compare:
     fig_imp.update_layout(
         title="RMSE Improvement vs ARIMA Baseline",
         xaxis_title="Model", yaxis_title="Improvement (%)",
-        yaxis=dict(range=[0, 80]),
+        yaxis=dict(range=[0, _imp_max * 1.25]),
         bargap=0.35,
     )
     st.plotly_chart(fig_imp, use_container_width=True)
@@ -279,26 +293,30 @@ with tab_compare:
     st.markdown("**Full Results Table**")
     st.dataframe(nb_df, use_container_width=True)
 
+    _best      = nb_df.loc[nb_df["RMSE"].idxmin()]
+    _best_name = _best["Model"]
+    _best_rmse = _best["RMSE"]
+    _best_mae  = _best["MAE"]
+    _best_imp  = _best["RMSE_Improvement_%"]
     st.success(
-        "✅ Best model: **LSTM** — RMSE **158.00**, MAE **133.59**, "
-        "**69.2% improvement** over ARIMA baseline (513.63)"
+        f"✅ Best model: **{_best_name}** — RMSE **{_best_rmse:.2f}**, "
+        f"MAE **{_best_mae:.2f}**, "
+        f"**{_best_imp:.1f}% improvement** over ARIMA baseline ({ARIMA_BASELINE:.2f})"
     )
 
     # ── All-model forecast overlay on the exact test window ───────────────────
     st.divider()
     st.markdown("#### All Models — Test Window (Jan 1 – Feb 12, 2021)")
-    st.caption(
-        "ARIMA and Prophet trained on data up to Dec 31, 2020. "
-        "LSTM and H2O AutoML predictions are from the original notebook (GPU-trained)."
-    )
+    st.caption("All predictions loaded from predictions.csv (original notebook run).")
 
     if st.button("▶ Show All Forecasts", type="primary"):
         mask_train = df["date"] < TEST_START
         train_vals = df.loc[mask_train, "new_cases"].values.astype(float)
 
-        # Compute live RMSE from predictions file
-        arima_rmse   = float(np.sqrt(np.mean((pred["arima_pred"]   - pred["actual"])**2)))
-        prophet_rmse = float(np.sqrt(np.mean((pred["prophet_pred"] - pred["actual"])**2)))
+        lstm_rmse    = _computed["LSTM"]["RMSE"]
+        h2o_rmse     = _computed["H2O AutoML"]["RMSE"]
+        prophet_rmse = _computed["Prophet"]["RMSE"]
+        arima_rmse   = _computed["ARIMA (baseline)"]["RMSE"]
 
         fig_live = go.Figure()
         fig_live.add_trace(go.Scatter(
@@ -321,12 +339,12 @@ with tab_compare:
         ))
         fig_live.add_trace(go.Scatter(
             x=pred["date"], y=pred["lstm_pred"],
-            name="LSTM (RMSE 158, notebook)",
+            name=f"LSTM (RMSE {lstm_rmse:.0f})",
             line=dict(color="#00CC96", dash="dashdot", width=2),
         ))
         fig_live.add_trace(go.Scatter(
             x=pred["date"], y=pred["h2o_pred"],
-            name="H2O AutoML (RMSE 200, notebook)",
+            name=f"H2O AutoML (RMSE {h2o_rmse:.0f})",
             line=dict(color="#636EFA", dash="longdash", width=2),
         ))
         fig_live.add_vrect(
@@ -343,9 +361,9 @@ with tab_compare:
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("ARIMA RMSE",   f"{arima_rmse:.1f}")
-        c2.metric("H2O RMSE",     "200.47", help="Notebook value")
+        c2.metric("H2O RMSE",     f"{h2o_rmse:.1f}")
         c3.metric("Prophet RMSE", f"{prophet_rmse:.1f}")
-        c4.metric("LSTM RMSE",    "158.00", help="Notebook value")
+        c4.metric("LSTM RMSE",    f"{lstm_rmse:.1f}")
     else:
         st.info("Click **▶ Show All Forecasts** to overlay all 4 models on the test window.")
 
@@ -353,5 +371,5 @@ with tab_compare:
 st.divider()
 st.caption(
     "Data: covid19_bangladesh_cleaned.csv · Predictions: predictions.csv · "
-    "LSTM & H2O AutoML from original notebook · Built with Streamlit"
+    "All metrics computed from predictions.csv · Built with Streamlit"
 )
