@@ -148,8 +148,8 @@ st.markdown(
 df   = load_data()
 pred = load_predictions()
 
-tab_eda, tab_pipeline, tab_forecast, tab_compare = st.tabs(
-    ["📊 Exploratory Analysis", "🔬 Data Pipeline", "🔮 Forecast", "📈 Model Comparison"]
+tab_pipeline, tab_eda, tab_forecast, tab_compare = st.tabs(
+    ["🔬 Data Pipeline", "📊 Exploratory Analysis", "🔮 Forecast", "📈 Model Comparison"]
 )
 
 # ── Tab 2 · Data Pipeline ─────────────────────────────────────────────────────
