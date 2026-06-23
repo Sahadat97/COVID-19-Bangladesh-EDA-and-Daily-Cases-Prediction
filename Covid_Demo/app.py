@@ -89,16 +89,45 @@ def load_predictions():
 
 @st.cache_data(show_spinner="Fetching Wikipedia data…", ttl=3600)
 def load_raw_data():
-    """Try live Wikipedia fetch; fall back to raw_sample.csv from repo."""
-    WIKI_URL = "https://en.wikipedia.org/wiki/COVID-19_pandemic_in_Bangladesh"
+    """Scrape Wikipedia using the exact notebook approach; fall back to raw_sample.csv."""
+    import requests as _req
+    from io import StringIO as _SIO
+
+    WIKI_URL = (
+        "https://en.wikipedia.org/wiki/"
+        "Statistics_of_the_COVID-19_pandemic_in_Bangladesh"
+        "#Table:_Daily_updates"
+    )
+    HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+    TABLE_IDX = 5
+
     try:
-        tables = pd.read_html(WIKI_URL, flavor="lxml")
-        # Find the table most likely to be daily stats: has 'Date' column and >50 rows
-        for t in tables:
-            cols = [str(c).lower() for c in t.columns]
-            if any("date" in c for c in cols) and len(t) > 50:
-                return t.head(30), "live"
-        raise ValueError("No suitable table found")
+        resp   = _req.get(WIKI_URL, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        tables = pd.read_html(_SIO(resp.text), header=0)
+
+        # Try TABLE_IDX=5 first (notebook default); scan if shape looks wrong
+        t = tables[TABLE_IDX].copy() if TABLE_IDX < len(tables) else None
+        if t is None or t.shape[1] < 6:
+            for candidate in tables:
+                if candidate.shape[0] > 100 and candidate.shape[1] >= 6:
+                    t = candidate.copy()
+                    break
+
+        if t is None:
+            raise ValueError("Daily statistics table not found")
+
+        # Promote row 0 as column names (notebook step)
+        t.columns = t.iloc[0]
+        t = t.drop(index=0).reset_index(drop=True)
+        return t.head(30), "live"
+
     except Exception:
         raw = pd.read_csv(RAW_SAMPLE_URL)
         return raw, "cached"
@@ -147,16 +176,16 @@ with tab_pipeline:
     # ── Column mapping ─────────────────────────────────────────────────────────
     st.markdown("#### Column Mapping (Raw → Cleaned)")
     col_map = pd.DataFrame([
-        {"Raw (Wikipedia)"         : "Date",                          "Cleaned (CSV)"                  : "final_date",                       "Transformation"               : "Parsed to datetime (lubridate)"},
-        {"Raw (Wikipedia)"         : "Total confirmed cases",         "Cleaned (CSV)"                  : "total_cases",                      "Transformation"               : "Footnotes stripped, cast to int"},
-        {"Raw (Wikipedia)"         : "New confirmed cases",           "Cleaned (CSV)"                  : "new_cases",                        "Transformation"               : "Footnotes stripped, NAs filled (0)"},
-        {"Raw (Wikipedia)"         : "Total deaths",                  "Cleaned (CSV)"                  : "total_deaths",                     "Transformation"               : "Footnotes stripped, cast to int"},
-        {"Raw (Wikipedia)"         : "New deaths",                    "Cleaned (CSV)"                  : "new_deaths",                       "Transformation"               : "Footnotes stripped, NAs filled (0)"},
-        {"Raw (Wikipedia)"         : "Total recoveries",              "Cleaned (CSV)"                  : "total_recovered",                  "Transformation"               : "Footnotes stripped, cast to int"},
-        {"Raw (Wikipedia)"         : "New recoveries",                "Cleaned (CSV)"                  : "newly_recovered",                  "Transformation"               : "Footnotes stripped, NAs filled (0)"},
-        {"Raw (Wikipedia)"         : "Total tested",                  "Cleaned (CSV)"                  : "total_tested",                     "Transformation"               : "Footnotes stripped, cast to int"},
-        {"Raw (Wikipedia)"         : "Days since first case",         "Cleaned (CSV)"                  : "days_since_first_confirmed_cases", "Transformation"               : "Cast to int"},
-        {"Raw (Wikipedia)"         : "Source",                        "Cleaned (CSV)"                  : "— (dropped)",                      "Transformation"               : "Removed — not needed for modelling"},
+        {"Raw (Wikipedia)"  : "Date",                             "Cleaned (CSV)"                  : "final_date",                       "Transformation"                        : "Footnotes stripped → pd.to_datetime"},
+        {"Raw (Wikipedia)"  : "Total tested",                     "Cleaned (CSV)"                  : "total_tested",                     "Transformation"                        : "str.extract(r'^(\\d+)') → int"},
+        {"Raw (Wikipedia)"  : "Newly tested",                     "Cleaned (CSV)"                  : "newly_tested",                     "Transformation"                        : "str.extract → NaN filled via cumulative diff (first 8 rows)"},
+        {"Raw (Wikipedia)"  : "Total cases",                      "Cleaned (CSV)"                  : "total_cases",                      "Transformation"                        : "pd.to_numeric, footnotes dropped"},
+        {"Raw (Wikipedia)"  : "New cases",                        "Cleaned (CSV)"                  : "new_cases",                        "Transformation"                        : "NaN filled via diff of total_cases (first 8 rows) → int"},
+        {"Raw (Wikipedia)"  : "Total deaths",                     "Cleaned (CSV)"                  : "total_deaths",                     "Transformation"                        : "pd.to_numeric, footnotes dropped"},
+        {"Raw (Wikipedia)"  : "New deaths",                       "Cleaned (CSV)"                  : "new_deaths",                       "Transformation"                        : "NaN filled via diff of total_deaths → int"},
+        {"Raw (Wikipedia)"  : "Total recovered",                  "Cleaned (CSV)"                  : "total_recovered",                  "Transformation"                        : "pd.to_numeric, footnotes dropped"},
+        {"Raw (Wikipedia)"  : "Newly recovered",                  "Cleaned (CSV)"                  : "newly_recovered",                  "Transformation"                        : "NaN filled via diff of total_recovered → int"},
+        {"Raw (Wikipedia)"  : "Days since first confirmed cases", "Cleaned (CSV)"                  : "days_since_first_confirmed_cases", "Transformation"                        : "pd.to_numeric → int"},
     ])
     st.dataframe(col_map, use_container_width=True, hide_index=True)
 
