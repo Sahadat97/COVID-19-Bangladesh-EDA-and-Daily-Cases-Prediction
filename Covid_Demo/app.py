@@ -37,21 +37,28 @@ def run_arima(train_series: tuple, n_periods: int):
 
 
 @st.cache_data(show_spinner="Training Prophet…")
-def run_prophet(train_df_records: tuple, future_dates: tuple):
-    """Fit Prophet on training data and return forecasts for future_dates."""
+def run_prophet(train_df_records: tuple):
+    """Fit Prophet matching notebook RMSE comparison parameters exactly."""
     import pandas as _pd
     import numpy as _np
     train = _pd.DataFrame(list(train_df_records), columns=["ds", "y"])
+    train["ds"] = _pd.to_datetime(train["ds"])
+    train = train.dropna()
     m = _Prophet(
-        yearly_seasonality="auto",
-        weekly_seasonality=False,
-        daily_seasonality=False,
-        changepoint_prior_scale=0.05,
+        yearly_seasonality      = False,
+        weekly_seasonality      = True,
+        daily_seasonality       = False,
+        seasonality_mode        = "multiplicative",
+        changepoint_prior_scale = 0.3,
     )
     m.fit(train)
-    future = _pd.DataFrame({"ds": list(future_dates)})
-    fc = m.predict(future)["yhat"].values
-    return _np.maximum(fc, 0)
+    future   = m.make_future_dataframe(periods=120)
+    forecast = m.predict(future)
+    fc_sub   = forecast[
+        (forecast["ds"] >= "2021-01-01") &
+        (forecast["ds"] <= "2021-02-12")
+    ]["yhat"].values
+    return _np.maximum(fc_sub, 0)
 
 st.set_page_config(
     page_title="COVID-19 Bangladesh Forecasting",
@@ -219,11 +226,14 @@ with tab_forecast:
                 label  = "ARIMA (live)"
                 source = "live"
             elif model_choice == "Prophet" and _PROPHET_AVAILABLE:
-                train_dates = df.loc[mask_train, "date"].values
-                records = tuple(zip(train_dates, train_vals))
-                future  = tuple(pred["date"].values)
+                # Notebook trains Prophet on data < 2020-11-01 (different cutoff from ARIMA)
+                prophet_cutoff = pd.Timestamp("2020-11-01")
+                mask_prophet   = df["date"] < prophet_cutoff
+                p_dates = df.loc[mask_prophet, "date"].values
+                p_vals  = df.loc[mask_prophet, "new_cases"].values.astype(float)
+                records = tuple(zip(p_dates, p_vals))
                 with st.spinner("Training Prophet…"):
-                    fc_vals = run_prophet(records, future)
+                    fc_vals = run_prophet(records)
                 label  = "Prophet (live)"
                 source = "live"
             else:
