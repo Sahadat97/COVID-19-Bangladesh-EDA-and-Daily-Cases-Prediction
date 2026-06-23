@@ -7,6 +7,52 @@ import plotly.express as px
 
 warnings.filterwarnings("ignore")
 
+# ── Optional live-model imports ───────────────────────────────────────────────
+try:
+    from pmdarima import auto_arima as _auto_arima
+    _ARIMA_AVAILABLE = True
+except ImportError:
+    _ARIMA_AVAILABLE = False
+
+try:
+    from prophet import Prophet as _Prophet
+    _PROPHET_AVAILABLE = True
+except ImportError:
+    _PROPHET_AVAILABLE = False
+
+
+# ── Live model functions ──────────────────────────────────────────────────────
+
+@st.cache_data(show_spinner="Training ARIMA…")
+def run_arima(train_series: tuple, n_periods: int):
+    """Fit ARIMA(1,1,1) on training data and return n_periods forecasts."""
+    import numpy as _np
+    from pmdarima import auto_arima as _aa
+    series = list(train_series)
+    model  = _aa(series, start_p=1, start_q=1, max_p=3, max_q=3, d=1,
+                 seasonal=False, stepwise=True, suppress_warnings=True,
+                 error_action="ignore", information_criterion="aic")
+    fc, _  = model.predict(n_periods=n_periods, return_conf_int=True)
+    return _np.maximum(fc, 0)
+
+
+@st.cache_data(show_spinner="Training Prophet…")
+def run_prophet(train_df_records: tuple, future_dates: tuple):
+    """Fit Prophet on training data and return forecasts for future_dates."""
+    import pandas as _pd
+    import numpy as _np
+    train = _pd.DataFrame(list(train_df_records), columns=["ds", "y"])
+    m = _Prophet(
+        yearly_seasonality=True,
+        weekly_seasonality=False,
+        daily_seasonality=False,
+        changepoint_prior_scale=0.05,
+    )
+    m.fit(train)
+    future = _pd.DataFrame({"ds": list(future_dates)})
+    fc = m.predict(future)["yhat"].values
+    return _np.maximum(fc, 0)
+
 st.set_page_config(
     page_title="COVID-19 Bangladesh Forecasting",
     page_icon="🦠",
@@ -127,9 +173,9 @@ with tab_forecast:
         return r, m
 
     _MODEL_META = {
-        "ARIMA":      {"col": "arima_pred",   "color": "#EF553B", "live": False},
+        "ARIMA":      {"col": "arima_pred",   "color": "#EF553B", "live": True},
         "H2O AutoML": {"col": "h2o_pred",     "color": "#636EFA", "live": False},
-        "Prophet":    {"col": "prophet_pred",  "color": "#FFA15A", "live": False},
+        "Prophet":    {"col": "prophet_pred",  "color": "#FFA15A", "live": True},
         "LSTM":       {"col": "lstm_pred",     "color": "#00CC96", "live": False},
     }
 
@@ -142,15 +188,20 @@ with tab_forecast:
         )
         meta = _MODEL_META[model_choice]
 
-        if model_choice in ("LSTM", "H2O AutoML"):
-            st.info(
-                f"**{model_choice}** requires GPU training. "
-                "Showing notebook results on the Jan 1 – Feb 12, 2021 test window."
-            )
+        if model_choice == "ARIMA":
+            if _ARIMA_AVAILABLE:
+                st.info("**ARIMA(1,1,1)** will train live on data up to Dec 31, 2020.")
+            else:
+                st.warning("pmdarima not installed — showing notebook results.")
+        elif model_choice == "Prophet":
+            if _PROPHET_AVAILABLE:
+                st.info("**Prophet** will train live on data up to Dec 31, 2020.")
+            else:
+                st.warning("prophet not installed — showing notebook results.")
         else:
             st.info(
-                f"Showing **{model_choice}** notebook results on the "
-                "Jan 1 – Feb 12, 2021 test window."
+                f"**{model_choice}** requires GPU training. "
+                "Showing notebook results (Jan 1 – Feb 12, 2021 test window)."
             )
 
         run_btn = st.button("▶ Run Forecast", type="primary", use_container_width=True)
@@ -159,9 +210,33 @@ with tab_forecast:
         if run_btn:
             mask_train = df["date"] < FC_TEST_START
             train_vals = df.loc[mask_train, "new_cases"].values.astype(float)
+            n_periods  = int((pred["date"].max() - pred["date"].min()).days) + 1
 
-            rmse, mae = _metrics(meta["col"])
+            # ── Decide: live train or load from CSV ───────────────────────────
+            if model_choice == "ARIMA" and _ARIMA_AVAILABLE:
+                with st.spinner("Training ARIMA…"):
+                    fc_vals = run_arima(tuple(train_vals), n_periods)
+                label  = "ARIMA (live)"
+                source = "live"
+            elif model_choice == "Prophet" and _PROPHET_AVAILABLE:
+                train_dates = df.loc[mask_train, "date"].values
+                records = tuple(zip(train_dates, train_vals))
+                future  = tuple(pred["date"].values)
+                with st.spinner("Training Prophet…"):
+                    fc_vals = run_prophet(records, future)
+                label  = "Prophet (live)"
+                source = "live"
+            else:
+                fc_vals = pred[meta["col"]].values
+                label   = f"{model_choice} (notebook)"
+                source  = "notebook"
 
+            # ── Metrics ───────────────────────────────────────────────────────
+            actual = pred["actual"].values.astype(float)
+            rmse = float(np.sqrt(np.mean((fc_vals - actual) ** 2)))
+            mae  = float(np.mean(np.abs(fc_vals - actual)))
+
+            # ── Plot ──────────────────────────────────────────────────────────
             fig = go.Figure()
             fig.add_trace(go.Scatter(
                 x=df.loc[mask_train, "date"], y=train_vals,
@@ -172,8 +247,8 @@ with tab_forecast:
                 name="Actual (test window)", line=dict(color="#fff", width=2.5),
             ))
             fig.add_trace(go.Scatter(
-                x=pred["date"], y=pred[meta["col"]],
-                name=f"{model_choice} (notebook)",
+                x=pred["date"], y=fc_vals,
+                name=label,
                 line=dict(color=meta["color"], dash="dash", width=2),
             ))
             fig.add_vrect(
@@ -187,9 +262,12 @@ with tab_forecast:
                 hovermode="x unified",
             )
             st.plotly_chart(fig, use_container_width=True)
+
             col_r, col_m = st.columns(2)
             col_r.metric("RMSE", f"{rmse:,.2f}")
             col_m.metric("MAE",  f"{mae:,.2f}")
+            if source == "live":
+                st.caption(f"✅ Trained live in this session — not pre-computed.")
         else:
             st.info("Select a model on the left and click **▶ Run Forecast**.")
 
