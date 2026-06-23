@@ -43,7 +43,7 @@ def run_prophet(train_df_records: tuple, future_dates: tuple):
     import numpy as _np
     train = _pd.DataFrame(list(train_df_records), columns=["ds", "y"])
     m = _Prophet(
-        yearly_seasonality=True,
+        yearly_seasonality="auto",
         weekly_seasonality=False,
         daily_seasonality=False,
         changepoint_prior_scale=0.05,
