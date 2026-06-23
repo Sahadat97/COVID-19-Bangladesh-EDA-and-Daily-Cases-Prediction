@@ -96,7 +96,7 @@ st.markdown(
     "Interactive demo of the "
     "[GitHub project](https://github.com/Sahadat97/COVID-19-Bangladesh-EDA-and-Daily-Cases-Prediction) "
     "by **Mohammad Sahadat Hossain**. "
-    "Data loaded from the cleaned dataset used in the notebook."
+    "Data scraped from Wikipedia and saved as the cleaned dataset used in the notebook."
 )
 
 df   = load_data()
