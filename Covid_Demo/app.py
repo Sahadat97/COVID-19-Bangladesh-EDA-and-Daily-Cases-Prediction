@@ -69,8 +69,9 @@ st.set_page_config(
 # ── Data ─────────────────────────────────────────────────────────────────────
 
 _BASE = "https://raw.githubusercontent.com/Sahadat97/COVID-19-Bangladesh-EDA-and-Daily-Cases-Prediction/main/"
-DATA_URL = _BASE + "covid19_bangladesh_cleaned.csv"
-PRED_URL = _BASE + "predictions.csv"
+DATA_URL       = _BASE + "covid19_bangladesh_cleaned.csv"
+PRED_URL       = _BASE + "predictions.csv"
+RAW_SAMPLE_URL = _BASE + "raw_sample.csv"
 
 @st.cache_data(show_spinner="Loading data…")
 def load_data():
@@ -86,6 +87,22 @@ def load_predictions():
     pred["date"] = pd.to_datetime(pred["date"])
     return pred
 
+@st.cache_data(show_spinner="Fetching Wikipedia data…", ttl=3600)
+def load_raw_data():
+    """Try live Wikipedia fetch; fall back to raw_sample.csv from repo."""
+    WIKI_URL = "https://en.wikipedia.org/wiki/COVID-19_pandemic_in_Bangladesh"
+    try:
+        tables = pd.read_html(WIKI_URL, flavor="lxml")
+        # Find the table most likely to be daily stats: has 'Date' column and >50 rows
+        for t in tables:
+            cols = [str(c).lower() for c in t.columns]
+            if any("date" in c for c in cols) and len(t) > 50:
+                return t.head(30), "live"
+        raise ValueError("No suitable table found")
+    except Exception:
+        raw = pd.read_csv(RAW_SAMPLE_URL)
+        return raw, "cached"
+
 
 
 
@@ -96,15 +113,106 @@ st.markdown(
     "Interactive demo of the "
     "[GitHub project](https://github.com/Sahadat97/COVID-19-Bangladesh-EDA-and-Daily-Cases-Prediction) "
     "by **Mohammad Sahadat Hossain**. "
-    "Data scraped from Wikipedia and saved as the cleaned dataset used in the notebook."
+    "Data loaded from the cleaned dataset used in the notebook."
 )
 
 df   = load_data()
 pred = load_predictions()
 
-tab_eda, tab_forecast, tab_compare = st.tabs(
-    ["📊 Exploratory Analysis", "🔮 Forecast", "📈 Model Comparison"]
+tab_eda, tab_pipeline, tab_forecast, tab_compare = st.tabs(
+    ["📊 Exploratory Analysis", "🔬 Data Pipeline", "🔮 Forecast", "📈 Model Comparison"]
 )
+
+# ── Tab 2 · Data Pipeline ─────────────────────────────────────────────────────
+with tab_pipeline:
+    st.subheader("🔬 Data Pipeline — Before & After Scraping")
+    st.markdown(
+        "The R pipeline scrapes the **Wikipedia COVID-19 Bangladesh table**, "
+        "cleans it, and outputs `covid19_bangladesh_cleaned.csv`. "
+        "This tab shows what the raw data looks like before and after that process."
+    )
+
+    raw_df, fetch_source = load_raw_data()
+
+    if fetch_source == "live":
+        st.success("✅ **Live fetch** — data pulled directly from Wikipedia right now.")
+    else:
+        st.warning(
+            "⚠️ **Cached sample** — Wikipedia fetch unavailable; "
+            "showing a representative sample of the raw scraped output."
+        )
+
+    st.divider()
+
+    # ── Column mapping ─────────────────────────────────────────────────────────
+    st.markdown("#### Column Mapping (Raw → Cleaned)")
+    col_map = pd.DataFrame([
+        {"Raw (Wikipedia)"         : "Date",                          "Cleaned (CSV)"                  : "final_date",                       "Transformation"               : "Parsed to datetime (lubridate)"},
+        {"Raw (Wikipedia)"         : "Total confirmed cases",         "Cleaned (CSV)"                  : "total_cases",                      "Transformation"               : "Footnotes stripped, cast to int"},
+        {"Raw (Wikipedia)"         : "New confirmed cases",           "Cleaned (CSV)"                  : "new_cases",                        "Transformation"               : "Footnotes stripped, NAs filled (0)"},
+        {"Raw (Wikipedia)"         : "Total deaths",                  "Cleaned (CSV)"                  : "total_deaths",                     "Transformation"               : "Footnotes stripped, cast to int"},
+        {"Raw (Wikipedia)"         : "New deaths",                    "Cleaned (CSV)"                  : "new_deaths",                       "Transformation"               : "Footnotes stripped, NAs filled (0)"},
+        {"Raw (Wikipedia)"         : "Total recoveries",              "Cleaned (CSV)"                  : "total_recovered",                  "Transformation"               : "Footnotes stripped, cast to int"},
+        {"Raw (Wikipedia)"         : "New recoveries",                "Cleaned (CSV)"                  : "newly_recovered",                  "Transformation"               : "Footnotes stripped, NAs filled (0)"},
+        {"Raw (Wikipedia)"         : "Total tested",                  "Cleaned (CSV)"                  : "total_tested",                     "Transformation"               : "Footnotes stripped, cast to int"},
+        {"Raw (Wikipedia)"         : "Days since first case",         "Cleaned (CSV)"                  : "days_since_first_confirmed_cases", "Transformation"               : "Cast to int"},
+        {"Raw (Wikipedia)"         : "Source",                        "Cleaned (CSV)"                  : "— (dropped)",                      "Transformation"               : "Removed — not needed for modelling"},
+    ])
+    st.dataframe(col_map, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # ── Side-by-side before / after ────────────────────────────────────────────
+    st.markdown("#### Side-by-Side Comparison (first 30 rows)")
+    col_b, col_a = st.columns(2)
+
+    with col_b:
+        st.markdown("**🔴 Before — Raw Wikipedia data**")
+        st.caption("String values, footnotes, '—' for missing, mixed formats")
+
+        def highlight_raw(df_s):
+            styles = pd.DataFrame("", index=df_s.index, columns=df_s.columns)
+            for col in df_s.columns:
+                for idx in df_s.index:
+                    val = str(df_s.at[idx, col])
+                    if val in ("—", "N/A", "nan", ""):
+                        styles.at[idx, col] = "background-color: #4a1010; color: #ff9999"
+                    elif any(c in val for c in ["[", "]"]):
+                        styles.at[idx, col] = "background-color: #3a2e00; color: #ffd966"
+            return styles
+
+        st.dataframe(
+            raw_df.style.apply(highlight_raw, axis=None),
+            use_container_width=True,
+            height=460,
+        )
+        st.caption("🔴 Red = missing value · 🟡 Yellow = footnote artifact")
+
+    with col_a:
+        st.markdown("**🟢 After — Cleaned dataset**")
+        st.caption("Typed columns, parsed dates, nulls filled, footnotes removed")
+
+        clean_preview = df[["date", "new_cases", "total_cases",
+                             "total_deaths", "new_deaths",
+                             "total_recovered"]].head(30).copy()
+        clean_preview["date"] = clean_preview["date"].dt.strftime("%Y-%m-%d")
+
+        st.dataframe(clean_preview, use_container_width=True, height=460)
+
+    st.divider()
+
+    # ── Cleaning summary metrics ────────────────────────────────────────────────
+    st.markdown("#### Cleaning Summary")
+    total_cells   = raw_df.size
+    missing_cells = raw_df.isin(["—", "N/A", ""]).sum().sum()
+    footnote_cols = sum(
+        raw_df[c].astype(str).str.contains(r"\[").any() for c in raw_df.columns
+    )
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total rows (full dataset)", f"{len(df):,}")
+    m2.metric("Missing values removed",    f"{missing_cells}")
+    m3.metric("Columns with footnotes",    f"{footnote_cols}")
+    m4.metric("Columns renamed",           "9")
 
 # ── Tab 1 · EDA ───────────────────────────────────────────────────────────────
 with tab_eda:

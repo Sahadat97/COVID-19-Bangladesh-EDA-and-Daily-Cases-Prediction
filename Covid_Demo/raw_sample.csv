@@ -1,0 +1,31 @@
+Date,Total confirmed cases,New confirmed cases,Total deaths,New deaths,Total recoveries,New recoveries,Total tested,Days since first case,Source
+8 March 2020,3,—,—,—,0,0,111,0,DGHS[a]
+11 March 2020,3[1],—,—,—,2,2,142,3,DGHS[a]
+12 March 2020,3,0,0,—,2,0,163[1],4,DGHS[a]
+13 March 2020,3,—,0,0,2[a],0,187,5,DGHS[a]
+14 March 2020,5,2[1],0,0,3,1,211,6,DGHS[a]
+15 March 2020,5,0,0,0,3[b],0,231,7,IEDCR[b]
+16 March 2020,8,3,0,0,3,—,241,8,IEDCR[b]
+17 March 2020,10,2,0,—,3,0,277[1],9,IEDCR[b]
+18 March 2020,14,4,1,1,3,1,351,10,IEDCR[b]
+19 March 2020,17[a],3,1,—,3,0,397,11,IEDCR[b]
+20 March 2020,20[1],3,1,0,3,—,433,12,IEDCR[b]
+21 March 2020,24,4,2,1,3[b],2,433[a],13,IEDCR[b]
+22 March 2020,27,3[b],2,0,5[1],0,564,14,IEDCR[b]
+23 March 2020,33,6,3,1,5[note 1],0,620,15,IEDCR[b]
+24 March 2020,39,6,4[a],1,5,—,712,16,IEDCR[b]
+25 March 2020,39[a],0,5,1,5,6[b],794,17,MoHFW
+26 March 2020,44,5,5[c],0,11[c],0,920,18,MoHFW
+27 March 2020,48,4[note 1],5,—,11,—,"1,026",19,MoHFW
+28 March 2020,48,—,5,0,15,4,"1,076",20,MoHFW
+29 March 2020,48[note 1],0,5,0,15,4,1,21,MoHFW
+30 March 2020,49,1,5[a],0,19,4[b],1[d],22,MoHFW
+31 March 2020,51,2[a],5,—,25[d],6,1,23,MoHFW
+1 April 2020,54,1,6,1[1],26,1[a],1,24,MoHFW
+2 April 2020,56,2,6,—,26,0,1[d],25,MoHFW
+3 April 2020,61,5,6[b],0,26[b],—,2[a],26,MoHFW
+4 April 2020,70,9,8,2[note 1],30,4,2,27,MoHFW
+5 April 2020,88,18[1],9,1,33,3[a],2,28,MoHFW
+6 April 2020,164,41,17,5,33,0,3,29,MoHFW
+7 April 2020,164,41[c],17[a],5,33,0,4[note 1],30,MoHFW
+8 April 2020,218,54,20,3[note 1],33[b],—,5[b],31,MoHFW
