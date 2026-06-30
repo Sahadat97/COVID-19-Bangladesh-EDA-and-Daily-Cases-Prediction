@@ -90,48 +90,40 @@ def load_predictions():
 
 @st.cache_data(show_spinner="Fetching Wikipedia data…", ttl=3600)
 def load_raw_data():
-    """Scrape Wikipedia using the exact notebook approach; fall back to raw_sample.csv."""
+    """Scrape Wikipedia via REST v1 HTML endpoint; fall back to raw_sample.csv."""
     import requests as _req
     from io import StringIO as _SIO
 
+    # REST v1 endpoint is accessible from cloud IPs and doesn't require a browser UA
     WIKI_URL = (
-        "https://en.wikipedia.org/wiki/"
+        "https://en.wikipedia.org/api/rest_v1/page/html/"
         "Statistics_of_the_COVID-19_pandemic_in_Bangladesh"
-        "#Table:_Daily_updates"
     )
     HEADERS = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
+        "User-Agent": "covid19-bangladesh-streamlit-app/1.0 (https://github.com/Sahadat97/COVID-19-Bangladesh-EDA-and-Daily-Cases-Prediction)"
     }
-    TABLE_IDX = 5
 
     try:
-        resp   = _req.get(WIKI_URL, headers=HEADERS, timeout=15)
+        resp = _req.get(WIKI_URL, headers=HEADERS, timeout=20)
         resp.raise_for_status()
         tables = pd.read_html(_SIO(resp.text), header=0)
 
-        # Try TABLE_IDX=5 first (notebook default); scan if shape looks wrong
-        t = tables[TABLE_IDX].copy() if TABLE_IDX < len(tables) else None
-        if t is None or t.shape[1] < 6:
-            for candidate in tables:
-                if candidate.shape[0] > 100 and candidate.shape[1] >= 6:
-                    t = candidate.copy()
-                    break
+        # Find the daily-statistics table: has a "Date" column and enough rows
+        t = None
+        for candidate in tables:
+            cols = [str(c).lower() for c in candidate.columns]
+            if any("date" in c for c in cols) and candidate.shape[0] > 20 and candidate.shape[1] >= 6:
+                t = candidate.copy()
+                break
 
         if t is None:
-            raise ValueError("Daily statistics table not found")
+            raise ValueError(f"Daily statistics table not found among {len(tables)} tables")
 
-        # Promote row 0 as column names (notebook step)
-        t.columns = t.iloc[0]
-        t = t.drop(index=0).reset_index(drop=True)
         return t.head(30), "live"
 
-    except Exception:
+    except Exception as _err:
         raw = pd.read_csv(RAW_SAMPLE_PATH)
-        return raw, "cached"
+        return raw, f"cached:{_err}"
 
 
 
@@ -171,6 +163,8 @@ with tab_pipeline:
             "⚠️ **Cached sample** — Wikipedia fetch unavailable; "
             "showing a representative sample of the raw scraped output."
         )
+        if ":" in fetch_source:
+            st.caption(f"Fetch error: {fetch_source.split(':', 1)[1]}")
 
     st.divider()
 
