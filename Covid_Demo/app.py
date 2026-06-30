@@ -1,4 +1,5 @@
 import warnings
+from pathlib import Path
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -71,7 +72,7 @@ st.set_page_config(
 _BASE = "https://raw.githubusercontent.com/Sahadat97/COVID-19-Bangladesh-EDA-and-Daily-Cases-Prediction/main/"
 DATA_URL       = _BASE + "covid19_bangladesh_cleaned.csv"
 PRED_URL       = _BASE + "predictions.csv"
-RAW_SAMPLE_URL = _BASE + "raw_sample.csv"
+RAW_SAMPLE_PATH = Path(__file__).parent / "raw_sample.csv"
 
 @st.cache_data(show_spinner="Loading data…")
 def load_data():
@@ -129,7 +130,7 @@ def load_raw_data():
         return t.head(30), "live"
 
     except Exception:
-        raw = pd.read_csv(RAW_SAMPLE_URL)
+        raw = pd.read_csv(RAW_SAMPLE_PATH)
         return raw, "cached"
 
 
@@ -156,7 +157,7 @@ tab_pipeline, tab_eda, tab_forecast, tab_compare = st.tabs(
 with tab_pipeline:
     st.subheader("🔬 Data Pipeline — Before & After Scraping")
     st.markdown(
-        "The R pipeline scrapes the **Wikipedia COVID-19 Bangladesh table**, "
+        "The Python pipeline scrapes the **Wikipedia COVID-19 Bangladesh table**,"
         "cleans it, and outputs `covid19_bangladesh_cleaned.csv`. "
         "This tab shows what the raw data looks like before and after that process."
     )
