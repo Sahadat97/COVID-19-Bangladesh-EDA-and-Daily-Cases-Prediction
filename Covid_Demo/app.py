@@ -93,8 +93,8 @@ def load_raw_data():
     """Scrape Wikipedia via REST v1 HTML endpoint; fall back to raw_sample.csv."""
     import requests as _req
     from io import StringIO as _SIO
+    from bs4 import BeautifulSoup as _BS
 
-    # REST v1 endpoint is accessible from cloud IPs and doesn't require a browser UA
     WIKI_URL = (
         "https://en.wikipedia.org/api/rest_v1/page/html/"
         "Statistics_of_the_COVID-19_pandemic_in_Bangladesh"
@@ -106,18 +106,22 @@ def load_raw_data():
     try:
         resp = _req.get(WIKI_URL, headers=HEADERS, timeout=20)
         resp.raise_for_status()
-        tables = pd.read_html(_SIO(resp.text), header=0)
 
-        # Find the daily-statistics table: has a "Date" column and enough rows
-        t = None
-        for candidate in tables:
-            cols = [str(c).lower() for c in candidate.columns]
-            if any("date" in c for c in cols) and candidate.shape[0] > 20 and candidate.shape[1] >= 6:
-                t = candidate.copy()
-                break
+        # Locate the table directly under the "Table: Daily updates" section heading
+        soup = _BS(resp.text, "lxml")
+        heading = soup.find("h3", id="Table:_Daily_updates")
+        if heading is None:
+            raise ValueError("Section heading 'Table: Daily updates' not found on Wikipedia page")
+        table_tag = heading.find_next_sibling("table")
+        if table_tag is None:
+            raise ValueError("No table found after 'Table: Daily updates' heading")
 
-        if t is None:
-            raise ValueError(f"Daily statistics table not found among {len(tables)} tables")
+        # Parse with multi-row header support, then flatten the MultiIndex columns
+        t = pd.read_html(_SIO(str(table_tag)), header=[0, 1])[0]
+        t.columns = [
+            b if not str(b).startswith("Unnamed") else a
+            for a, b in t.columns
+        ]
 
         return t.head(30), "live"
 
